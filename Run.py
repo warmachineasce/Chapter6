@@ -3,39 +3,26 @@ import os
 import cv2
 import numpy as np
 from skimage.metrics import structural_similarity as ssim
-import tempfile
 import asyncio
 
 # ==== CONFIG ====
-API_ID = '21124978'
+API_ID = 21124978
 API_HASH = '63f41b60df295e52b2a967e5f9c02977'
 SESSION_NAME = 'hexamon_bot'
 GROUP_ID = -1001923517416  # Replace with your group's ID or username
 POKEMON_FOLDER = 'pokemon_images'
+HEXAMON_BOT_ID = 572621020
 # ================
 
 client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
-
-# Keep track of state to know when we're expecting a response
-expecting_silhouette = False
+expecting_silhouette = False  # Track state after sending /guess
 
 def extract_silhouette_from_scene_bytes(image_bytes):
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     _, binary = cv2.threshold(gray, 50, 255, cv2.THRESH_BINARY_INV)
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        raise ValueError("No silhouette found.")
-    largest_contour = max(contours, key=cv2.contourArea)
-    x, y, w, h = cv2.boundingRect(largest_contour)
-    cropped = binary[y:y+h, x:x+w]
-    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-        temp_filename = tmp_file.name
-        cv2.imwrite(temp_filename, cropped)
-    silhouette_png = cv2.imread(temp_filename, cv2.IMREAD_GRAYSCALE)
-    os.remove(temp_filename)
-    return silhouette_png
+    return binary  # No cropping or resizing
 
 def preprocess_pokemon_image(path):
     img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
@@ -44,8 +31,6 @@ def preprocess_pokemon_image(path):
     if len(img.shape) == 2:
         gray = img
     elif img.shape[2] == 4:
-        alpha = img[:, :, 3]
-        _, _ = cv2.threshold(alpha, 1, 255, cv2.THRESH_BINARY)
         gray = cv2.cvtColor(img[:, :, :3], cv2.COLOR_BGR2GRAY)
     else:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -80,22 +65,20 @@ def guess_pokemon(silhouette):
 async def all_handler(event):
     global expecting_silhouette
 
-    # Step 1: Trigger the game
     if event.raw_text.lower() == "/startguess":
         print("Sending /guess command...")
         expecting_silhouette = True
         await client.send_message(GROUP_ID, "/guess")
         return
 
-    # Step 2: Wait for the image from HeXamonBot
-    if expecting_silhouette and event.photo and event.sender.username == "HeXamonBot":
+    if expecting_silhouette and event.photo and event.sender_id == HEXAMON_BOT_ID:
         print("Silhouette received from HeXamonBot.")
         try:
             image_bytes = await event.download_media(bytes)
             silhouette = extract_silhouette_from_scene_bytes(image_bytes)
             name = guess_pokemon(silhouette)
             if name:
-                await asyncio.sleep(2)  # Small delay to avoid racing messages
+                await asyncio.sleep(2)
                 await client.send_message(GROUP_ID, name)
                 print(f"Guessed Pokémon: {name}")
             else:
